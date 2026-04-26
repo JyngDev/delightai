@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { MOCK_DATA } from "@/lib/mock-data";
 import AgentHome from "@/components/workspace/AgentHome";
@@ -13,12 +14,14 @@ export default async function AgentPage({
   const agent = workspace.agents.find((a) => a.slug === agentSlug);
   if (!agent) notFound();
   return (
-    <AgentHome
-      agent={agent}
-      orgSlug={orgSlug}
-      orgName={MOCK_DATA.organization.name}
-      wsSlug={wsSlug}
-      wsName={workspace.name}
-    />
+    <Suspense>
+      <AgentHome
+        agent={agent}
+        orgSlug={orgSlug}
+        orgName={MOCK_DATA.organization.name}
+        wsSlug={wsSlug}
+        wsName={workspace.name}
+      />
+    </Suspense>
   );
 }

@@ -200,7 +200,7 @@ function ActiveIssuesPanel({
           return (
             <Link
               key={agent.id}
-              href={`/org/${orgSlug}/ws/${workspace.slug}/agent/${agent.slug}`}
+              href={`/org/${orgSlug}/ws/${workspace.slug}/agent/${agent.slug}?env=${env}&tab=overview`}
               className="group relative flex flex-col gap-2 px-4 py-3.5 hover:bg-[#fafafa] transition-colors"
               style={{ borderTop: i > 0 ? "1px solid #f4f4f5" : undefined }}
             >

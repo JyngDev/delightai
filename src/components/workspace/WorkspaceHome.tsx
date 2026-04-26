@@ -341,6 +341,14 @@ export default function WorkspaceHome({ workspace, orgSlug, orgName }: Workspace
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between pb-8 mb-8 -mx-8 px-8 border-b border-[#f4f4f5]">
         <div className="flex items-center gap-4">
+          {workspace.coverImage && (
+            <img
+              src={workspace.coverImage}
+              alt=""
+              className="w-9 h-9 rounded-lg object-cover shrink-0"
+              style={{ boxShadow: "rgba(0,0,0,0.08) 0px 0px 0px 1px" }}
+            />
+          )}
           <h1
             className="text-[28px] font-semibold text-[#171717] leading-tight"
             style={{ letterSpacing: "-0.4px" }}

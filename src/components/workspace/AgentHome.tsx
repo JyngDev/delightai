@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Agent, AgentEnvironmentInstance, getEnvInstance } from "@/lib/mock-data";
 
 // ── types & helpers ──────────────────────────────────────────────────────────
@@ -344,9 +345,9 @@ const DEV_EDIT_HISTORY: { type: "edit" | "save" | "promote"; event: string; who:
 
 // ── Overview Tab ─────────────────────────────────────────────────────────────
 
-const ALERT_ITEMS: Record<EnvType, { level: "warning" | "info"; title: string; desc: string }[]> = {
+const ALERT_ITEMS: Record<EnvType, { level: "warning" | "info"; title: string; desc: string; action?: { tab: TabType; label: string } }[]> = {
   production: [
-    { level: "warning", title: "Resolution rate dropped on Refund intent",   desc: "지난 48시간 환불 관련 대화 해결률 62% — 평균 대비 -12%p. Evaluate 탭에서 확인하세요." },
+    { level: "warning", title: "Resolution rate dropped on Refund intent",   desc: "지난 48시간 환불 관련 대화 해결률 62% — 평균 대비 -12%p. Evaluate 탭에서 확인하세요.", action: { tab: "evaluate", label: "Evaluate 보기" } },
     { level: "warning", title: "Response latency spike detected",             desc: "피크 시간대 평균 응답 시간 3.1s. 정상 범위(< 1.5s) 초과 중입니다." },
     { level: "info",    title: "CSAT improving trend",                        desc: "최근 7일 CSAT 4.5로 전주 대비 +0.2 상승 중입니다." },
   ],
@@ -361,21 +362,53 @@ const ALERT_ITEMS: Record<EnvType, { level: "warning" | "info"; title: string; d
   ],
 };
 
+const NEWSLETTER_ALERT_ITEMS: Record<EnvType, { level: "warning" | "info"; title: string; desc: string; action?: { tab: TabType; label: string } }[]> = {
+  production: [
+    { level: "warning", title: "발송 대기열 미처리",           desc: "Suspended 상태로 인해 3건의 뉴스레터 발송이 대기 중입니다. Suspended 해제 후 대기열을 확인하세요." },
+    { level: "info",    title: "마지막 발송: Feb 10, 2026",   desc: "2개월 이상 발송이 중단된 상태입니다. 구독자에게 공지가 필요할 수 있습니다." },
+  ],
+  staging: [
+    { level: "info", title: "Staging 배포 준비 완료", desc: "프로덕션 재활성화 전 Staging에서 템플릿을 최종 검증하세요." },
+  ],
+  development: [
+    { level: "info", title: "발송 스케줄 미설정", desc: "Development 환경에서 발송 스케줄이 설정되지 않았습니다. Build 탭에서 설정하세요." },
+  ],
+};
+
+const MATCH_ALERT_ITEMS: Record<EnvType, { level: "warning" | "info"; title: string; desc: string; action?: { tab: TabType; label: string } }[]> = {
+  production: [
+    { level: "warning", title: "xG 계산 누락 발생",            desc: "데이터 파이프라인 지연으로 지난 48시간 xG 계산 3건 누락. Evaluate 탭에서 확인하세요.", action: { tab: "evaluate", label: "Evaluate 보기" } },
+    { level: "info",    title: "신규 경기 데이터 수집 완료",    desc: "Villarreal (Apr 22) · Atlético (Apr 20) 경기 데이터가 자동 수집됐습니다." },
+  ],
+  staging: [
+    { level: "warning", title: "Pass network 시뮬레이션 2건 실패", desc: "데이터 형식 오류로 2건 실패. Test 탭에서 실패 원인을 확인하세요." },
+    { level: "info",    title: "Staging 배포 2d 4h 경과",           desc: "권장 검증 기간(24h) 경과. 테스트 완료 시 Production으로 Promote 가능합니다." },
+  ],
+  development: [
+    { level: "info",    title: "xG 모델 v3 교체 관련 변경 4건",  desc: "Instructions · Model · Knowledgebase · Safeguards가 수정됐습니다. Build 탭에서 검토하세요." },
+    { level: "info",    title: "최근 18h 시뮬레이션 실행 없음",  desc: "Promote 전 Test 탭에서 분석 시뮬레이션을 실행하세요." },
+  ],
+};
+
 function OverviewTab({
-  agent, env, instance,
+  agent, env, instance, onNavigateTab,
 }: {
-  agent: Agent; env: EnvType; instance: AgentEnvironmentInstance | null;
+  agent: Agent; env: EnvType; instance: AgentEnvironmentInstance | null; onNavigateTab?: (tab: TabType) => void;
 }) {
   const m = agent.metrics;
   const sev = m?.alertSeverity;
   const isAlertEnv = !m?.alertEnv || m.alertEnv === env;
+  const isMatchAnalysis = agent.id === "agent_match";
+  const isNewsletter = agent.id === "agent_newsletter";
+  const isSuspended = instance?.suspended ?? false;
 
   const warningCount = isAlertEnv ? (sev?.warning ?? 0) : 0;
   const infoCount    = isAlertEnv ? (sev?.info    ?? 0) : 0;
 
+  const alertItemSource = isMatchAnalysis ? MATCH_ALERT_ITEMS : isNewsletter ? NEWSLETTER_ALERT_ITEMS : ALERT_ITEMS;
   const visibleAlerts = [
-    ...ALERT_ITEMS[env].filter((a) => a.level === "warning").slice(0, warningCount),
-    ...ALERT_ITEMS[env].filter((a) => a.level === "info").slice(0, infoCount),
+    ...alertItemSource[env].filter((a) => a.level === "warning").slice(0, warningCount),
+    ...alertItemSource[env].filter((a) => a.level === "info").slice(0, infoCount),
   ];
 
   const AlertSection = () => {
@@ -403,10 +436,21 @@ function OverviewTab({
                   style={{ background: isWarn ? "#dc2626" : "#6366f1" }}
                 />
               </span>
-              <div>
+              <div className="flex-1 min-w-0">
                 <p className="text-[13px] font-semibold mb-0.5" style={{ color: isWarn ? "#991b1b" : "#3730a3" }}>{a.title}</p>
                 <p className="text-[12px]" style={{ color: isWarn ? "#dc2626" : "#4f46e5" }}>{a.desc}</p>
               </div>
+              {a.action && onNavigateTab && (
+                <div className="shrink-0 flex items-center self-stretch">
+                  <button
+                    onClick={() => onNavigateTab(a.action!.tab)}
+                    className="px-3 py-1.5 rounded-md text-[12px] font-medium cursor-pointer transition-opacity hover:opacity-80"
+                    style={{ background: "#fff", color: "#991b1b", boxShadow: "rgba(153,27,27,0.3) 0px 0px 0px 1px" }}
+                  >
+                    {a.action!.label}
+                  </button>
+                </div>
+              )}
             </div>
           );
         })}
@@ -415,84 +459,181 @@ function OverviewTab({
   };
 
   if (env === "production") {
-    const healthColor = instance?.health === "healthy" ? "#16a34a" : instance?.health === "warning" ? "#d97706" : "#dc2626";
-    const healthLabel = instance?.health === "healthy" ? "Healthy" : instance?.health === "warning" ? "Warning" : "Error";
+    const healthColor = isSuspended ? "#a1a1aa" : instance?.health === "healthy" ? "#16a34a" : instance?.health === "warning" ? "#d97706" : "#dc2626";
+    const healthLabel = isSuspended ? "Suspended" : instance?.health === "healthy" ? "Healthy" : instance?.health === "warning" ? "Warning" : "Error";
     const deployHistory = buildDeployHistory(instance);
-    const topIntents = [
-      { label: "Ticket purchase",  count: 342, pct: 100 },
-      { label: "Refund request",   count: 218, pct: 64 },
-      { label: "Match schedule",   count: 197, pct: 58 },
-      { label: "Membership info",  count: 143, pct: 42 },
-      { label: "Seat upgrade",     count: 89,  pct: 26 },
-    ];
+    const topIntents = isMatchAnalysis
+      ? [
+          { label: "xG Analysis",       count: 89,  pct: 100 },
+          { label: "Pressure Report",   count: 67,  pct: 75  },
+          { label: "Pass Network",      count: 54,  pct: 61  },
+          { label: "Set Piece Analysis",count: 41,  pct: 46  },
+          { label: "Opponent Scout",    count: 32,  pct: 36  },
+        ]
+      : isNewsletter
+      ? [
+          { label: "Welcome Series",    count: 12, pct: 100 },
+          { label: "Weekly Digest",     count: 10, pct: 83  },
+          { label: "Match Preview",     count: 8,  pct: 67  },
+          { label: "Player Spotlight",  count: 6,  pct: 50  },
+          { label: "Transfer Special",  count: 3,  pct: 25  },
+        ]
+      : [
+          { label: "Ticket purchase",  count: 342, pct: 100 },
+          { label: "Refund request",   count: 218, pct: 64 },
+          { label: "Match schedule",   count: 197, pct: 58 },
+          { label: "Membership info",  count: 143, pct: 42 },
+          { label: "Seat upgrade",     count: 89,  pct: 26 },
+        ];
+    const recentRows = isMatchAnalysis
+      ? [
+          { time: "2m ago",  user: "Analyst #2291", intent: "xG Analysis",       csat: null, resolved: true  },
+          { time: "9m ago",  user: "Analyst #4420", intent: "Pressure Report",    csat: null, resolved: true  },
+          { time: "17m ago", user: "Analyst #2231", intent: "Pass Network",       csat: null, resolved: false },
+          { time: "25m ago", user: "Analyst #9001", intent: "Set Piece Analysis", csat: null, resolved: true  },
+          { time: "38m ago", user: "Analyst #5542", intent: "Opponent Scout",     csat: null, resolved: true  },
+        ]
+      : isNewsletter
+      ? [
+          { time: "Feb 10",  user: "Weekly Digest #41",    intent: "48,200 subscribers", csat: null, resolved: true  },
+          { time: "Feb 3",   user: "Match Preview",        intent: "Villarreal away",    csat: null, resolved: true  },
+          { time: "Jan 27",  user: "Weekly Digest #40",    intent: "48,050 subscribers", csat: null, resolved: true  },
+          { time: "Jan 20",  user: "Player Spotlight",     intent: "Lamine Yamal",       csat: null, resolved: true  },
+          { time: "Jan 13",  user: "Weekly Digest #39",    intent: "47,880 subscribers", csat: null, resolved: true  },
+        ]
+      : [
+          { time: "2m ago",  user: "User #8821", intent: "Ticket purchase", csat: 5,    resolved: true  },
+          { time: "5m ago",  user: "User #4420", intent: "Refund request",  csat: 4,    resolved: true  },
+          { time: "12m ago", user: "User #2231", intent: "Seat change",     csat: null, resolved: false },
+          { time: "18m ago", user: "User #9001", intent: "Match schedule",  csat: 5,    resolved: true  },
+          { time: "24m ago", user: "User #5542", intent: "Membership info", csat: 3,    resolved: false },
+        ];
     return (
       <div>
+        {/* Suspended 배너 */}
+        {isSuspended && (
+          <div className="flex items-center gap-3 px-4 py-3 rounded-lg mb-3" style={{ background: "rgb(244,244,245)", boxShadow: "rgba(0,0,0,0.08) 0px 0px 0px 1px" }}>
+            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: "#a1a1aa" }} />
+            <div className="flex-1 min-w-0">
+              <span className="text-[13px] font-semibold text-[#52525b]">이 에이전트는 현재 Suspended 상태입니다.</span>
+              <span className="text-[12px] text-[#a1a1aa] ml-2">실시간 처리가 중단되어 있습니다. 재활성화하려면 Suspended를 해제하세요.</span>
+            </div>
+            <button className="px-3 py-1.5 rounded-md text-[12px] font-medium cursor-pointer transition-colors hover:bg-[#e4e4e7]" style={{ background: "#ffffff", color: "#171717", boxShadow: "rgba(0,0,0,0.1) 0px 0px 0px 1px" }}>
+              Unsuspend
+            </button>
+          </div>
+        )}
+
         {/* 알림 — 최상단 */}
         <AlertSection />
 
         {/* Block B: KPI 4개 */}
         <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-10">
-          {/* Conversations Today */}
+          {/* KPI 1 */}
           <div className="group metric-card rounded-xl overflow-hidden flex flex-col cursor-pointer" style={{ boxShadow: "rgba(0,0,0,0.08) 0px 0px 0px 1px" }}>
             <div className="relative px-5 pt-4 pb-4">
               <div className="absolute right-4 top-4 opacity-0 -translate-x-2 transition-all duration-200 group-hover:opacity-100 group-hover:translate-x-0 text-[#a1a1aa]">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7h9M8 3.5L11.5 7 8 10.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </div>
-              <p className="text-[11px] font-semibold text-[#a1a1aa] capitalize tracking-wide mb-3">Conversations Today</p>
+              <p className="text-[11px] font-semibold text-[#a1a1aa] capitalize tracking-wide mb-3">{isMatchAnalysis ? "Reports Today" : isNewsletter ? "Queued Sends" : "Conversations Today"}</p>
               <div className="flex items-baseline gap-2">
-                <p className="text-[28px] font-semibold text-[#171717] leading-none" style={{ letterSpacing: "-0.5px" }}>1,248</p>
-                <span className="text-[12px] font-medium text-[#15803d]">↑8.3%</span>
+                <p className="text-[28px] font-semibold leading-none" style={{ letterSpacing: "-0.5px", color: isNewsletter ? "#dc2626" : "#171717" }}>
+                  {isMatchAnalysis ? "47" : isNewsletter ? "3" : "1,248"}
+                </p>
+                <span className="text-[12px] font-medium" style={{ color: isNewsletter ? "#dc2626" : "#15803d" }}>
+                  {isMatchAnalysis ? "↑12.3%" : isNewsletter ? "대기 중" : "↑8.3%"}
+                </span>
               </div>
             </div>
-            <Sparkline data={[980, 1100, 890, 1320, 1050, 1400, 1248]} color="#a3a3a3" />
+            <Sparkline data={isMatchAnalysis ? [31, 38, 29, 44, 40, 52, 47] : isNewsletter ? [0, 0, 0, 0, 0, 0, 3] : [980, 1100, 890, 1320, 1050, 1400, 1248]} color={isNewsletter ? "#fca5a5" : "#a3a3a3"} />
           </div>
 
-          {/* Avg CSAT */}
+          {/* KPI 2 */}
           <div className="group metric-card rounded-xl overflow-hidden flex flex-col cursor-pointer" style={{ boxShadow: "rgba(0,0,0,0.08) 0px 0px 0px 1px" }}>
             <div className="relative px-5 pt-4 pb-4">
               <div className="absolute right-4 top-4 opacity-0 -translate-x-2 transition-all duration-200 group-hover:opacity-100 group-hover:translate-x-0 text-[#a1a1aa]">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7h9M8 3.5L11.5 7 8 10.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </div>
-              <p className="text-[11px] font-semibold text-[#a1a1aa] capitalize tracking-wide mb-3">Avg CSAT</p>
+              <p className="text-[11px] font-semibold text-[#a1a1aa] capitalize tracking-wide mb-3">{isMatchAnalysis ? "Data Coverage" : isNewsletter ? "Subscribers" : "Avg CSAT"}</p>
               <div className="flex items-baseline gap-2">
-                <div className="flex items-baseline gap-1.5">
-                  <p className="text-[28px] font-semibold text-[#171717] leading-none" style={{ letterSpacing: "-0.5px" }}>{m?.csat?.toFixed(1) ?? "—"}</p>
-                  {m?.csat != null && <p className="text-[13px] text-[#a1a1aa]">/ 5</p>}
-                </div>
-                {m?.csat != null && <span className="text-[12px] font-medium text-[#15803d]">↑0.1</span>}
+                {isMatchAnalysis ? (
+                  <>
+                    <p className="text-[28px] font-semibold text-[#171717] leading-none" style={{ letterSpacing: "-0.5px" }}>98.3%</p>
+                    <span className="text-[12px] font-medium text-[#dc2626]">↓0.2%</span>
+                  </>
+                ) : isNewsletter ? (
+                  <>
+                    <p className="text-[28px] font-semibold text-[#171717] leading-none" style={{ letterSpacing: "-0.5px" }}>48,200</p>
+                    <span className="text-[12px] font-medium text-[#15803d]">↑320</span>
+                  </>
+                ) : (
+                  <div className="flex items-baseline gap-1.5">
+                    <p className="text-[28px] font-semibold text-[#171717] leading-none" style={{ letterSpacing: "-0.5px" }}>{m?.csat?.toFixed(1) ?? "—"}</p>
+                    {m?.csat != null && <p className="text-[13px] text-[#a1a1aa]">/ 5</p>}
+                    {m?.csat != null && <span className="text-[12px] font-medium text-[#15803d]">↑0.1</span>}
+                  </div>
+                )}
               </div>
             </div>
-            <Sparkline data={[3.8, 3.7, 4.0, 3.9, 4.2, 4.3, m?.csat ?? 4.3]} color="#93c5fd" />
+            <Sparkline data={isMatchAnalysis ? [99.1, 98.8, 99.4, 98.6, 99.0, 98.5, 98.3] : isNewsletter ? [46800, 47100, 47400, 47700, 47900, 48050, 48200] : [3.8, 3.7, 4.0, 3.9, 4.2, 4.3, m?.csat ?? 4.3]} color="#93c5fd" />
           </div>
 
-          {/* Resolution Rate */}
+          {/* KPI 3 */}
           <div className="group metric-card rounded-xl overflow-hidden flex flex-col cursor-pointer" style={{ boxShadow: "rgba(0,0,0,0.08) 0px 0px 0px 1px" }}>
             <div className="relative px-5 pt-4 pb-4">
               <div className="absolute right-4 top-4 opacity-0 -translate-x-2 transition-all duration-200 group-hover:opacity-100 group-hover:translate-x-0 text-[#a1a1aa]">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7h9M8 3.5L11.5 7 8 10.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </div>
-              <p className="text-[11px] font-semibold text-[#a1a1aa] capitalize tracking-wide mb-3">Resolution Rate</p>
+              <p className="text-[11px] font-semibold text-[#a1a1aa] capitalize tracking-wide mb-3">{isMatchAnalysis ? "Avg Process Time" : isNewsletter ? "Open Rate (last send)" : "Resolution Rate"}</p>
               <div className="flex items-baseline gap-2">
-                <p className="text-[28px] font-semibold text-[#171717] leading-none" style={{ letterSpacing: "-0.5px" }}>{m?.resolutionRate ? `${m.resolutionRate}%` : "—"}</p>
-                {m?.resolutionRate != null && <span className="text-[12px] font-medium text-[#15803d]">↑2%</span>}
+                {isMatchAnalysis ? (
+                  <>
+                    <p className="text-[28px] font-semibold text-[#171717] leading-none" style={{ letterSpacing: "-0.5px" }}>2.1s</p>
+                    <span className="text-[12px] font-medium text-[#d97706]">↑0.3s</span>
+                  </>
+                ) : isNewsletter ? (
+                  <>
+                    <p className="text-[28px] font-semibold text-[#171717] leading-none" style={{ letterSpacing: "-0.5px" }}>34.2%</p>
+                    <span className="text-[12px] font-medium text-[#15803d]">↑1.4%</span>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-[28px] font-semibold text-[#171717] leading-none" style={{ letterSpacing: "-0.5px" }}>{m?.resolutionRate ? `${m.resolutionRate}%` : "—"}</p>
+                    {m?.resolutionRate != null && <span className="text-[12px] font-medium text-[#15803d]">↑2%</span>}
+                  </>
+                )}
               </div>
             </div>
-            <Sparkline data={[68, 72, 70, 75, 73, 78, m?.resolutionRate ?? 74]} color="#86efac" />
+            <Sparkline data={isMatchAnalysis ? [1.6, 1.8, 1.5, 1.9, 2.0, 1.8, 2.1] : isNewsletter ? [30.1, 31.5, 32.2, 33.0, 32.8, 33.9, 34.2] : [68, 72, 70, 75, 73, 78, m?.resolutionRate ?? 74]} color={isMatchAnalysis ? "#fcd34d" : "#86efac"} />
           </div>
 
-          {/* Avg Response Time */}
+          {/* KPI 4 */}
           <div className="group metric-card rounded-xl overflow-hidden flex flex-col cursor-pointer" style={{ boxShadow: "rgba(0,0,0,0.08) 0px 0px 0px 1px" }}>
             <div className="relative px-5 pt-4 pb-4">
               <div className="absolute right-4 top-4 opacity-0 -translate-x-2 transition-all duration-200 group-hover:opacity-100 group-hover:translate-x-0 text-[#a1a1aa]">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7h9M8 3.5L11.5 7 8 10.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </div>
-              <p className="text-[11px] font-semibold text-[#a1a1aa] capitalize tracking-wide mb-3">Avg Response Time</p>
+              <p className="text-[11px] font-semibold text-[#a1a1aa] capitalize tracking-wide mb-3">{isMatchAnalysis ? "Missing Data Incidents" : isNewsletter ? "Last Send" : "Avg Response Time"}</p>
               <div className="flex items-baseline gap-2">
-                <p className="text-[28px] font-semibold text-[#171717] leading-none" style={{ letterSpacing: "-0.5px" }}>1.3s</p>
-                <span className="text-[12px] font-medium text-[#dc2626]">↑0.2s</span>
+                {isMatchAnalysis ? (
+                  <>
+                    <p className="text-[28px] font-semibold text-[#171717] leading-none" style={{ letterSpacing: "-0.5px" }}>3</p>
+                    <span className="text-[12px] font-medium text-[#dc2626]">▲ last 48h</span>
+                  </>
+                ) : isNewsletter ? (
+                  <>
+                    <p className="text-[22px] font-semibold text-[#a1a1aa] leading-none" style={{ letterSpacing: "-0.5px" }}>Feb 10</p>
+                    <span className="text-[12px] font-medium text-[#dc2626]">75d ago</span>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-[28px] font-semibold text-[#171717] leading-none" style={{ letterSpacing: "-0.5px" }}>1.3s</p>
+                    <span className="text-[12px] font-medium text-[#dc2626]">↑0.2s</span>
+                  </>
+                )}
               </div>
             </div>
-            <Sparkline data={[1.0, 1.1, 0.9, 1.2, 1.0, 1.4, 1.3]} color="#fca5a5" />
+            <Sparkline data={isMatchAnalysis ? [0, 1, 0, 2, 1, 1, 3] : isNewsletter ? [1, 1, 1, 1, 1, 1, 0] : [1.0, 1.1, 0.9, 1.2, 1.0, 1.4, 1.3]} color={isNewsletter ? "#d4d4d8" : "#fca5a5"} />
           </div>
         </div>
 
@@ -532,12 +673,12 @@ function OverviewTab({
         </div>
 
 
-        {/* Block D: Top Intents */}
-        <h3 className="text-[20px] font-semibold text-[#171717] mb-4">Top Intents (last 7 days)</h3>
+        {/* Block D: Top Query Types */}
+        <h3 className="text-[20px] font-semibold text-[#171717] mb-4">{isMatchAnalysis ? "Top Query Types (last 7 days)" : isNewsletter ? "Send History by Template" : "Top Intents (last 7 days)"}</h3>
         <div className="rounded-xl overflow-hidden mb-10" style={{ boxShadow: "rgba(0,0,0,0.08) 0px 0px 0px 1px" }}>
           {topIntents.map((intent, i) => (
             <div key={i} className="flex items-center gap-4 px-5 py-3" style={{ borderTop: i > 0 ? "1px solid #f4f4f5" : undefined }}>
-              <span className="text-[14px] text-[#171717] w-36 shrink-0">{intent.label}</span>
+              <span className="text-[14px] text-[#171717] w-40 shrink-0">{intent.label}</span>
               <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: "#f4f4f5" }}>
                 <div className="h-full rounded-full" style={{ width: `${intent.pct}%`, background: "#171717" }} />
               </div>
@@ -546,39 +687,40 @@ function OverviewTab({
           ))}
         </div>
 
-        {/* Block E: 최근 대화 */}
-        <h3 className="text-[20px] font-semibold text-[#171717] mb-4">Recent Conversations</h3>
+        {/* Block E: 최근 세션 */}
+        <h3 className="text-[20px] font-semibold text-[#171717] mb-4">{isMatchAnalysis ? "Recent Analysis Sessions" : isNewsletter ? "Recent Sends" : "Recent Conversations"}</h3>
         <div className="rounded-lg overflow-hidden mb-10" style={{ boxShadow: "rgba(0,0,0,0.08) 0px 0px 0px 1px" }}>
           <table className="w-full text-[14px]">
             <thead>
               <tr style={{ background: "#fafafa", borderBottom: "1px solid #f4f4f5" }}>
-                {["Time", "User", "Intent", "CSAT", "Status"].map((h) => (
+                {(isMatchAnalysis
+                  ? ["Time", "Analyst", "Query Type", "Status"]
+                  : isNewsletter
+                  ? ["Date", "Issue", "Target", "Status"]
+                  : ["Time", "User", "Intent", "CSAT", "Status"]
+                ).map((h) => (
                   <th key={h} className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#a1a1aa] capitalize tracking-wide">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {[
-                { time: "2m ago",  user: "User #8821", intent: "Ticket purchase", csat: 5,    resolved: true },
-                { time: "5m ago",  user: "User #4420", intent: "Refund request",  csat: 4,    resolved: true },
-                { time: "12m ago", user: "User #2231", intent: "Seat change",     csat: null, resolved: false },
-                { time: "18m ago", user: "User #9001", intent: "Match schedule",  csat: 5,    resolved: true },
-                { time: "24m ago", user: "User #5542", intent: "Membership info", csat: 3,    resolved: false },
-              ].map((row, i) => (
+              {recentRows.map((row, i) => (
                 <tr key={i} className="hover:bg-[#fafafa] cursor-pointer transition-colors" style={{ borderTop: "1px solid #f4f4f5" }}>
                   <td className="px-4 py-3 text-[13px] text-[#a1a1aa]">{row.time}</td>
                   <td className="px-4 py-3 font-medium text-[#171717]">{row.user}</td>
                   <td className="px-4 py-3 text-[#666666]">{row.intent}</td>
-                  <td className="px-4 py-3">
-                    {row.csat !== null ? (
-                      <span className="text-[13px] font-medium" style={{ color: row.csat >= 4 ? "#15803d" : "#d97706" }}>
-                        {"★".repeat(row.csat)}{"☆".repeat(5 - row.csat)}
-                      </span>
-                    ) : <span className="text-[13px] text-[#d4d4d8]">—</span>}
-                  </td>
+                  {!isMatchAnalysis && !isNewsletter && (
+                    <td className="px-4 py-3">
+                      {row.csat !== null ? (
+                        <span className="text-[13px] font-medium" style={{ color: (row.csat ?? 0) >= 4 ? "#15803d" : "#d97706" }}>
+                          {"★".repeat(row.csat ?? 0)}{"☆".repeat(5 - (row.csat ?? 0))}
+                        </span>
+                      ) : <span className="text-[13px] text-[#d4d4d8]">—</span>}
+                    </td>
+                  )}
                   <td className="px-4 py-3">
                     <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full" style={{ background: row.resolved ? "#f0fdf4" : "#fff7ed", color: row.resolved ? "#15803d" : "#c2410c" }}>
-                      {row.resolved ? "Resolved" : "Pending"}
+                      {row.resolved ? (isMatchAnalysis ? "Complete" : isNewsletter ? "Sent" : "Resolved") : (isMatchAnalysis ? "Incomplete" : isNewsletter ? "Failed" : "Pending")}
                     </span>
                   </td>
                 </tr>
@@ -1350,14 +1492,70 @@ function TestTab({ agent, env }: { agent: Agent; env: EnvType }) {
 // ── Evaluate Tab ─────────────────────────────────────────────────────────────
 
 function EvaluateTab({ agent, env }: { agent: Agent; env: EnvType }) {
+  const isMatchAnalysis = agent.id === "agent_match";
+  const isNewsletter = agent.id === "agent_newsletter";
+
+  if (isNewsletter) {
+    return (
+      <div>
+        <div className="flex items-center gap-3 px-4 py-3 rounded-lg mb-6" style={{ background: "#f4f4f5", boxShadow: "rgba(0,0,0,0.08) 0px 0px 0px 1px" }}>
+          <span className="w-2 h-2 rounded-full shrink-0" style={{ background: "#a1a1aa" }} />
+          <p className="text-[13px] text-[#71717a]">
+            Fan Newsletter Bot은 배치 발송 에이전트입니다. 실시간 대화 평가 대신 <strong className="text-[#52525b]">발송 성과 리포트</strong>를 확인하세요.
+          </p>
+        </div>
+        <div className="grid grid-cols-3 gap-4 mb-6">
+          {[
+            { label: "Total Sends (all time)", value: "41" },
+            { label: "Avg Open Rate",          value: "32.8%" },
+            { label: "Avg Click Rate",         value: "6.2%" },
+          ].map((card) => (
+            <div key={card.label} className="rounded-xl px-4 py-4" style={{ boxShadow: "rgba(0,0,0,0.08) 0px 0px 0px 1px" }}>
+              <p className="text-[11px] font-semibold text-[#a1a1aa] capitalize tracking-wide mb-2">{card.label}</p>
+              <p className="text-[24px] font-semibold text-[#171717]" style={{ letterSpacing: "-0.4px" }}>{card.value}</p>
+            </div>
+          ))}
+        </div>
+        <div className="rounded-lg overflow-hidden" style={{ boxShadow: "rgba(0,0,0,0.08) 0px 0px 0px 1px" }}>
+          <div className="px-4 py-2.5" style={{ background: "#fafafa", borderBottom: "1px solid #f4f4f5" }}>
+            <span className="text-[11px] font-semibold text-[#a1a1aa] capitalize tracking-wide">Send performance history</span>
+          </div>
+          {[
+            { date: "Feb 10, 2026", issue: "Weekly Digest #41", recipients: 48200, openRate: 34.2, clickRate: 6.8 },
+            { date: "Feb 3, 2026",  issue: "Match Preview",     recipients: 48050, openRate: 38.1, clickRate: 9.2 },
+            { date: "Jan 27, 2026", issue: "Weekly Digest #40", recipients: 47880, openRate: 33.5, clickRate: 6.1 },
+            { date: "Jan 20, 2026", issue: "Player Spotlight",  recipients: 47700, openRate: 41.7, clickRate: 11.3 },
+            { date: "Jan 13, 2026", issue: "Weekly Digest #39", recipients: 47520, openRate: 32.0, clickRate: 5.9 },
+          ].map((row, i) => (
+            <div key={i} className="flex items-center gap-4 px-4 py-3 text-[13px]" style={{ borderTop: i > 0 ? "1px solid #f4f4f5" : undefined }}>
+              <span className="text-[#a1a1aa] w-28 shrink-0">{row.date}</span>
+              <span className="text-[#171717] flex-1 font-medium">{row.issue}</span>
+              <span className="text-[#666666] w-20 text-right">{row.recipients.toLocaleString()} rcpt</span>
+              <span className="font-medium w-16 text-right" style={{ color: row.openRate >= 35 ? "#15803d" : "#d97706" }}>{row.openRate}% open</span>
+              <span className="text-[#888888] w-16 text-right">{row.clickRate}% click</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   if (env === "development") {
-    const simRows = [
-      { session: "Sim #047", intent: "Ticket purchase", turns: 4, confidence: 0.96, passed: true },
-      { session: "Sim #046", intent: "Refund request",  turns: 6, confidence: 0.81, passed: true },
-      { session: "Sim #045", intent: "Seat upgrade",    turns: 3, confidence: 0.54, passed: false },
-      { session: "Sim #044", intent: "Match schedule",  turns: 2, confidence: 0.99, passed: true },
-      { session: "Sim #043", intent: "Membership info", turns: 5, confidence: 0.72, passed: true },
-    ];
+    const simRows = isMatchAnalysis
+      ? [
+          { session: "Sim #047", intent: "xG Analysis",        turns: 3, confidence: 0.96, passed: true  },
+          { session: "Sim #046", intent: "Pressure Report",    turns: 4, confidence: 0.88, passed: true  },
+          { session: "Sim #045", intent: "Pass Network",       turns: 5, confidence: 0.61, passed: false },
+          { session: "Sim #044", intent: "Set Piece Analysis", turns: 2, confidence: 0.95, passed: true  },
+          { session: "Sim #043", intent: "Opponent Scout",     turns: 6, confidence: 0.79, passed: true  },
+        ]
+      : [
+          { session: "Sim #047", intent: "Ticket purchase", turns: 4, confidence: 0.96, passed: true  },
+          { session: "Sim #046", intent: "Refund request",  turns: 6, confidence: 0.81, passed: true  },
+          { session: "Sim #045", intent: "Seat upgrade",    turns: 3, confidence: 0.54, passed: false },
+          { session: "Sim #044", intent: "Match schedule",  turns: 2, confidence: 0.99, passed: true  },
+          { session: "Sim #043", intent: "Membership info", turns: 5, confidence: 0.72, passed: true  },
+        ];
     return (
       <div>
         <div className="grid grid-cols-3 gap-4 mb-3">
@@ -1399,13 +1597,21 @@ function EvaluateTab({ agent, env }: { agent: Agent; env: EnvType }) {
   }
 
   if (env === "staging") {
-    const intentRows = [
-      { intent: "Ticket purchase", total: 12, pass: 12, fail: 0,  avgConf: 0.95 },
-      { intent: "Refund request",  total: 8,  pass: 6,  fail: 2,  avgConf: 0.71 },
-      { intent: "Seat upgrade",    total: 10, pass: 9,  fail: 1,  avgConf: 0.84 },
-      { intent: "Match schedule",  total: 8,  pass: 8,  fail: 0,  avgConf: 0.98 },
-      { intent: "Membership info", total: 7,  pass: 7,  fail: 0,  avgConf: 0.91 },
-    ];
+    const intentRows = isMatchAnalysis
+      ? [
+          { intent: "xG Analysis",        total: 15, pass: 14, fail: 1, avgConf: 0.93 },
+          { intent: "Pressure Report",    total: 10, pass: 9,  fail: 1, avgConf: 0.85 },
+          { intent: "Pass Network",       total: 12, pass: 12, fail: 0, avgConf: 0.97 },
+          { intent: "Set Piece Analysis", total: 8,  pass: 8,  fail: 0, avgConf: 0.98 },
+          { intent: "Opponent Scout",     total: 5,  pass: 4,  fail: 1, avgConf: 0.76 },
+        ]
+      : [
+          { intent: "Ticket purchase", total: 12, pass: 12, fail: 0,  avgConf: 0.95 },
+          { intent: "Refund request",  total: 8,  pass: 6,  fail: 2,  avgConf: 0.71 },
+          { intent: "Seat upgrade",    total: 10, pass: 9,  fail: 1,  avgConf: 0.84 },
+          { intent: "Match schedule",  total: 8,  pass: 8,  fail: 0,  avgConf: 0.98 },
+          { intent: "Membership info", total: 7,  pass: 7,  fail: 0,  avgConf: 0.91 },
+        ];
     return (
       <div>
         <div className="grid grid-cols-3 gap-4 mb-3">
@@ -1466,12 +1672,20 @@ function EvaluateTab({ agent, env }: { agent: Agent; env: EnvType }) {
       </div>
 
       <div className="grid grid-cols-4 gap-4 mb-8">
-        {[
-          { label: "Resolution Rate",   value: "87%",       change: "+2% vs last week", pos: true },
-          { label: "Escalation Rate",   value: "13%",       change: "-2% vs last week", pos: true },
-          { label: "Avg Confidence",    value: "84%",       change: "+1% vs last week", pos: true },
-          { label: "Low Confidence",    value: String(lowConf), change: `${lowConf} flagged`, pos: false },
-        ].map((card) => (
+        {(isMatchAnalysis
+          ? [
+              { label: "Accuracy Rate",      value: "94%",           change: "+1% vs last week", pos: true  },
+              { label: "Incomplete Reports", value: "6",             change: "3 data gaps",       pos: false },
+              { label: "Avg Confidence",     value: "91%",           change: "+2% vs last week", pos: true  },
+              { label: "Missing Data",       value: "3",             change: "last 48h",         pos: false },
+            ]
+          : [
+              { label: "Resolution Rate",  value: "87%",           change: "+2% vs last week", pos: true  },
+              { label: "Escalation Rate",  value: "13%",           change: "-2% vs last week", pos: true  },
+              { label: "Avg Confidence",   value: "84%",           change: "+1% vs last week", pos: true  },
+              { label: "Low Confidence",   value: String(lowConf), change: `${lowConf} flagged`, pos: false },
+            ]
+        ).map((card) => (
           <div key={card.label} className="rounded-xl px-5 py-4" style={{ boxShadow: "rgba(0,0,0,0.08) 0px 0px 0px 1px" }}>
             <p className="text-[11px] font-semibold text-[#a1a1aa] capitalize tracking-wide mb-3">{card.label}</p>
             <div className="flex items-end gap-2">
@@ -1482,17 +1696,93 @@ function EvaluateTab({ agent, env }: { agent: Agent; env: EnvType }) {
         ))}
       </div>
 
+      {/* Resolution by Intent / Accuracy by Analysis Type */}
+      <div className="rounded-lg overflow-hidden mb-6" style={{ boxShadow: "rgba(0,0,0,0.08) 0px 0px 0px 1px" }}>
+        <div className="px-4 py-2.5 flex items-center justify-between" style={{ background: "#fafafa", borderBottom: "1px solid #f4f4f5" }}>
+          <span className="text-[11px] font-semibold text-[#a1a1aa] capitalize tracking-wide">
+            {isMatchAnalysis ? "Accuracy by analysis type" : "Resolution rate by intent"}
+          </span>
+          <span className="text-[11px] text-[#a1a1aa]">
+            {isMatchAnalysis ? "지난 48시간 · 평균 91%" : "지난 48시간 · 평균 74%"}
+          </span>
+        </div>
+        {(isMatchAnalysis
+          ? [
+              { intent: "xG Analysis",        rate: 96, avg: 91, sessions: 89 },
+              { intent: "Pressure Report",    rate: 88, avg: 91, sessions: 67, warn: true },
+              { intent: "Pass Network",       rate: 94, avg: 91, sessions: 54 },
+              { intent: "Set Piece Analysis", rate: 97, avg: 91, sessions: 41 },
+              { intent: "Opponent Scout",     rate: 82, avg: 91, sessions: 32, warn: true },
+            ]
+          : [
+              { intent: "Ticket purchase",  rate: 91, avg: 74, sessions: 342 },
+              { intent: "Refund request",   rate: 62, avg: 74, sessions: 218, warn: true },
+              { intent: "Seat upgrade",     rate: 88, avg: 74, sessions: 104 },
+              { intent: "Match schedule",   rate: 95, avg: 74, sessions: 97 },
+              { intent: "Membership info",  rate: 89, avg: 74, sessions: 63 },
+            ]
+        ).map((row, i) => (
+          <div
+            key={i}
+            className="flex items-center gap-4 px-4 py-3"
+            style={{
+              borderTop: i > 0 ? "1px solid #f4f4f5" : undefined,
+              background: row.warn ? "#fff8f8" : undefined,
+            }}
+          >
+            <span className="text-[13px] text-[#171717] w-36 shrink-0 font-medium">{row.intent}</span>
+            <div className="flex-1 flex items-center gap-3">
+              <div className="flex-1 rounded-full overflow-hidden" style={{ height: "6px", background: "#f4f4f5" }}>
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${row.rate}%`,
+                    background: row.warn ? "#dc2626" : "#16a34a",
+                  }}
+                />
+              </div>
+              <span
+                className="text-[13px] font-semibold w-8 text-right shrink-0"
+                style={{ color: row.warn ? "#dc2626" : "#171717" }}
+              >
+                {row.rate}%
+              </span>
+            </div>
+            <span
+              className="text-[12px] font-medium w-16 text-right shrink-0"
+              style={{ color: row.rate < row.avg ? "#dc2626" : "#15803d" }}
+            >
+              {row.rate >= row.avg ? "+" : ""}{row.rate - row.avg}%p
+            </span>
+            <span className="text-[12px] text-[#a1a1aa] w-20 text-right shrink-0">{row.sessions.toLocaleString()} sessions</span>
+          </div>
+        ))}
+      </div>
+
       <div className="rounded-lg overflow-hidden" style={{ boxShadow: "rgba(0,0,0,0.08) 0px 0px 0px 1px" }}>
         <table className="w-full text-[14px]">
           <thead>
             <tr style={{ background: "#fafafa", borderBottom: "1px solid #f4f4f5" }}>
-              {["Time", "User", "Intent", "Confidence", "CSAT", "Status"].map((h) => (
+              {(isMatchAnalysis
+                ? ["Time", "Analyst", "Query Type", "Accuracy", "Status"]
+                : ["Time", "User", "Intent", "Confidence", "CSAT", "Status"]
+              ).map((h) => (
                 <th key={h} className="px-4 py-2.5 text-left text-[11px] font-semibold text-[#a1a1aa] capitalize tracking-wide">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {MOCK_CONVERSATIONS.map((row, i) => (
+            {(isMatchAnalysis
+              ? [
+                  { time: "14m ago", user: "Analyst #2291", intent: "xG Analysis",        confidence: 0.97, csat: 0, status: "resolved"  },
+                  { time: "28m ago", user: "Analyst #7734", intent: "Pressure Report",    confidence: 0.52, csat: 0, status: "escalated" },
+                  { time: "41m ago", user: "Analyst #1102", intent: "Pass Network",       confidence: 0.88, csat: 0, status: "resolved"  },
+                  { time: "55m ago", user: "Analyst #8832", intent: "Set Piece Analysis", confidence: 0.94, csat: 0, status: "resolved"  },
+                  { time: "1h ago",  user: "Analyst #3310", intent: "xG Analysis",        confidence: 0.99, csat: 0, status: "resolved"  },
+                  { time: "1h ago",  user: "Analyst #6621", intent: "Opponent Scout",     confidence: 0.41, csat: 0, status: "escalated" },
+                ]
+              : MOCK_CONVERSATIONS
+            ).map((row, i) => (
               <tr key={i} className="hover:bg-[#fafafa] cursor-pointer transition-colors" style={{ borderTop: "1px solid #f4f4f5" }}>
                 <td className="px-4 py-3 text-[13px] text-[#a1a1aa]">{row.time}</td>
                 <td className="px-4 py-3 font-medium text-[#171717]">{row.user}</td>
@@ -1509,11 +1799,13 @@ function EvaluateTab({ agent, env }: { agent: Agent; env: EnvType }) {
                     </span>
                   </div>
                 </td>
-                <td className="px-4 py-3">
-                  <span className="text-[13px]" style={{ color: row.csat >= 4 ? "#15803d" : row.csat >= 3 ? "#d97706" : "#dc2626" }}>
-                    {"★".repeat(row.csat)}{"☆".repeat(5 - row.csat)}
-                  </span>
-                </td>
+                {!isMatchAnalysis && (
+                  <td className="px-4 py-3">
+                    <span className="text-[13px]" style={{ color: row.csat >= 4 ? "#15803d" : row.csat >= 3 ? "#d97706" : "#dc2626" }}>
+                      {"★".repeat(row.csat)}{"☆".repeat(5 - row.csat)}
+                    </span>
+                  </td>
+                )}
                 <td className="px-4 py-3">
                   <span
                     className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
@@ -1522,7 +1814,7 @@ function EvaluateTab({ agent, env }: { agent: Agent; env: EnvType }) {
                       color: row.status === "resolved" ? "#15803d" : "#dc2626",
                     }}
                   >
-                    {row.status === "resolved" ? "Resolved" : "Escalated"}
+                    {row.status === "resolved" ? (isMatchAnalysis ? "Complete" : "Resolved") : (isMatchAnalysis ? "Incomplete" : "Escalated")}
                   </span>
                 </td>
               </tr>
@@ -1548,15 +1840,27 @@ export default function AgentHome({ agent, orgSlug, orgName, wsSlug, wsName }: A
   const prod    = getEnvInstance(agent, "production");
   const staging = getEnvInstance(agent, "staging");
 
-  const initEnv: EnvType = prod ? "production" : staging ? "staging" : "development";
   const DEFAULT_TAB: Record<EnvType, TabType> = { development: "build", staging: "test", production: "overview" };
 
+  const searchParams = useSearchParams();
+  const qEnv = searchParams.get("env") as EnvType | null;
+  const qTab = searchParams.get("tab") as TabType | null;
+
+  const fallbackEnv: EnvType = prod ? "production" : staging ? "staging" : "development";
+  const VALID_ENVS: EnvType[] = ["development", "staging", "production"];
+  const VALID_TABS: TabType[] = ["overview", "build", "test", "evaluate"];
+  const initEnv: EnvType = qEnv && VALID_ENVS.includes(qEnv) ? qEnv : fallbackEnv;
+  const initTab: TabType = qTab && VALID_TABS.includes(qTab) ? qTab : DEFAULT_TAB[initEnv];
+
   const [selectedEnv, setSelectedEnv] = useState<EnvType>(initEnv);
-  const [selectedTab, setSelectedTab] = useState<TabType>(DEFAULT_TAB[initEnv]);
+  const [selectedTab, setSelectedTab] = useState<TabType>(initTab);
   const [showPromote, setShowPromote] = useState(false);
   const [hoveredEnv, setHoveredEnv] = useState<EnvType | null>(null);
+  const prevAgentId = useRef(agent.id);
 
   useEffect(() => {
+    if (prevAgentId.current === agent.id) return;
+    prevAgentId.current = agent.id;
     const env: EnvType = prod ? "production" : staging ? "staging" : "development";
     setSelectedEnv(env);
     setSelectedTab(DEFAULT_TAB[env]);
@@ -1674,7 +1978,7 @@ export default function AgentHome({ agent, orgSlug, orgName, wsSlug, wsName }: A
 
             {/* Tab content */}
             <div className="px-8 pt-2 pb-8 flex-1 overflow-y-auto">
-              {selectedTab === "overview"  && <OverviewTab  agent={agent} env={selectedEnv} instance={selectedInstance} />}
+              {selectedTab === "overview"  && <OverviewTab  agent={agent} env={selectedEnv} instance={selectedInstance} onNavigateTab={setSelectedTab} />}
               {selectedTab === "build"     && <BuildTab     agent={agent} env={selectedEnv} />}
               {selectedTab === "test"      && <TestTab      agent={agent} env={selectedEnv} />}
               {selectedTab === "evaluate"  && <EvaluateTab  agent={agent} env={selectedEnv} />}
